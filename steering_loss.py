@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from utils.data import AntibioticDataset, ParallelNSPDataset, load_bible_data, load_steering_vector
 from utils.hooking import HookManager
-from utils.compatibility import Device, HookAddress, ModelConfig
+from utils.compatibility import Device, HookAddress, ModelConfig, Colors
 
 
 from sklearn.decomposition import PCA
@@ -161,7 +161,7 @@ def get_steering_vector_scores(
         lan2: str,
         amount_datapoints: int,
         layers=None,
-        hook_addresses=None
+        hook_addresses=None,
     ):
     '''
     plots loss for steering each layer
@@ -270,7 +270,7 @@ def get_steering_vector_scores(
             ax = axs[idx][idy]
             improvement_scores = [avg_normalized_improvement[hook_address.layer(layer)][steering_lambda] for layer in layers]
 
-            ax.bar(layers, improvement_scores)
+            ax.bar(layers, improvement_scores, color=Colors.color(hook_address))
             ax.set_title(f"{hook_address.address}, lambda={steering_lambda}")
             ax.set_ylim(-0.3, 0.5)
             ax.axhline(y=0, color='k', linestyle='dotted', linewidth=1)

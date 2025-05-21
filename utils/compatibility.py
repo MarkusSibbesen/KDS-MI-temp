@@ -3,6 +3,7 @@ from enum import Enum
 
 
 
+
 class FilePaths:
 
     antibiotic_folder = lambda lan: f'data/antibiotic/{lan}.txt'
@@ -46,6 +47,19 @@ class ModelName:
         return names[type(model)]
 
 
+class Colors:
+
+    @staticmethod
+    def color(hook_address):
+        _colors = {
+            'layernorm_1-pre': 'orange',
+            'attention-pre': 'orange',
+            'attention-post': 'orange',
+            'layernorm_2-pre': 'green',
+            'mlp-pre': 'green',
+            'mlp-post': 'green'
+        }
+        return _colors[hook_address.value]
 
 class HookAddress(Enum):
     layernorm_1_pre = 'layernorm_1-pre'
