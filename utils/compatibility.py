@@ -57,6 +57,10 @@ class HookAddress(Enum):
 
     def layer(self, layer):
         return f'layer.{layer}.{self.value}'
+    
+    @property
+    def address(self):
+        return self.value
 
 
 class Hookpoints:

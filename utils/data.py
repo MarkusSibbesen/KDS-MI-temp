@@ -3,7 +3,7 @@ from torch.utils.data import Dataset, Subset
 import random
 import xml.etree.ElementTree as ET
 
-from utils.compatibility import FilePaths
+from utils.compatibility import FilePaths, Device
 
 
 
@@ -202,5 +202,5 @@ def load_bible_data(lan1, lan2):
 
 
 def load_steering_vector(lan, hook_address, model):
-    return torch.load(FilePaths.steering_vectors(lan, hook_address, model), map_location='cpu')
-
+    
+    return torch.load(FilePaths.steering_vectors(lan, hook_address, model), map_location=Device.device(model))

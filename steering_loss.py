@@ -2,13 +2,14 @@ import torch
 from transformers import PreTrainedTokenizerBase, GPTNeoXForCausalLM, GPT2Model
 from torch.utils.data import Dataset
 from pathlib import Path
+import numpy as np
+from tqdm import tqdm
 
-from utils.data import TextClassificationDataset, ParallelNSPDataset, load_bible_data, load_steering_vector
+from utils.data import AntibioticDataset, ParallelNSPDataset, load_bible_data, load_steering_vector
 from utils.hooking import HookManager
-from utils.compatibility import Device, HookAddress
+from utils.compatibility import Device, HookAddress, ModelConfig
 
 
-import torch
 from sklearn.decomposition import PCA
 from matplotlib import pyplot as plt
 from matplotlib.pyplot import Axes
@@ -21,7 +22,7 @@ def generate_with_steering(
         model: GPTNeoXForCausalLM | GPT2Model,
         tokenizer: PreTrainedTokenizerBase,
         hook_address,
-        text_prompts: TextClassificationDataset | list[str] | str,
+        text_prompts: AntibioticDataset | list[str] | str,
         steering_vector: torch.Tensor,
         steering_lambda: int = 1,
         amount_samples: int = 10,
@@ -152,13 +153,12 @@ def plot_loss_for_steering_vectors(
         model: GPTNeoXForCausalLM | GPT2Model,
         tokenizer: PreTrainedTokenizerBase,
         ds: ParallelNSPDataset,
-        layers,
-        hook_address,
         steering_lambda: int,
         lan1: str,
         lan2: str,
         amount_datapoints: int,
-        ax: Axes
+        layers=None,
+        hook_addresses=None
     ):
     '''
     plots loss for steering each layer
@@ -180,70 +180,90 @@ def plot_loss_for_steering_vectors(
     losses_without_steering = defaultdict(list)
     losses_with_correct_context = defaultdict(list)
 
+    if not hook_addresses:
+        hook_addresses = list(HookAddress)
+    if not layers:
+        layers = list(range(ModelConfig.hidden_layers(model)))
 
-    steering_vector = load_steering_vector(lan2, hook_address, model)
 
-    for idx, x in enumerate(ds):
+    for idx, x in tqdm(enumerate(ds)):
         if idx > amount_datapoints:
             break
         
         for layer in layers:
+            for hook_address in hook_addresses:
+
+                steering_vector = load_steering_vector(lan2, hook_address.layer(layer), model)
             
-            # computes the loss, when the model is steered towards the continuation language 
-            loss_with_steering_ = loss_with_steering(
-                model=model,
-                tokenizer=tokenizer,
-                hook_address=hook_address,
-                prompt=x[lan1][0],
-                continuation=x[lan2][1],
-                steering_vector=steering_vector,
-                steering_lambda=steering_lambda
-            )
-            losses_with_steering[layer].append(loss_with_steering_)
+                # computes the loss, when the model is steered towards the continuation language 
+                loss_with_steering_ = loss_with_steering(
+                    model=model,
+                    tokenizer=tokenizer,
+                    hook_address=hook_address.layer(layer),
+                    prompt=x[lan1][0],
+                    continuation=x[lan2][1],
+                    steering_vector=steering_vector,
+                    steering_lambda=steering_lambda
+                )
+                losses_with_steering[hook_address.layer(layer)].append(loss_with_steering_)
 
-            # computes the loss, when the model is not steering
-            loss_without_steering = loss_with_steering(
-                model=model,
-                tokenizer=tokenizer,
-                hook_address=hook_address,
-                prompt=x[lan1][0],
-                continuation=x[lan2][1],
-                steering_vector=steering_vector,
-                steering_lambda=0
-            )
-            losses_without_steering[layer].append(loss_without_steering)
+                # computes the loss, when the model is not steering
+                loss_without_steering = loss_with_steering(
+                    model=model,
+                    tokenizer=tokenizer,
+                    hook_address=hook_address.layer(layer),
+                    prompt=x[lan1][0],
+                    continuation=x[lan2][1],
+                    steering_vector=steering_vector,
+                    steering_lambda=0
+                )
+                losses_without_steering[hook_address.layer(layer)].append(loss_without_steering)
 
-            # computes the loss without steering, but where the prompt matches the continuation language
-            loss_with_correct_context = loss_with_steering(
-                model=model,
-                tokenizer=tokenizer,
-                hook_address=hook_address,
-                prompt=x[lan2][0],
-                continuation=x[lan2][1],
-                steering_vector=steering_vector,
-                steering_lambda=0
-            )
-            losses_with_correct_context[layer].append(loss_with_correct_context)
+                # computes the loss without steering, but where the prompt matches the continuation language
+                loss_with_correct_context = loss_with_steering(
+                    model=model,
+                    tokenizer=tokenizer,
+                    hook_address=hook_address.layer(layer),
+                    prompt=x[lan2][0],
+                    continuation=x[lan2][1],
+                    steering_vector=steering_vector,
+                    steering_lambda=0
+                )
+                losses_with_correct_context[hook_address.layer(layer)].append(loss_with_correct_context)
 
 
-    layers = list(losses_with_steering.keys())
-    avg_normalized_improvement = []
+    avg_normalized_improvement = dict()
 
     for layer in layers:
-        avg_steered = mean(losses_with_steering[layer])
-        avg_non_steered = mean(losses_without_steering[layer])
-        avg_with_context = mean(losses_with_correct_context[layer])
+        for hook_address in hook_addresses:
+            avg_steered = mean(losses_with_steering[hook_address.layer(layer)])
+            avg_non_steered = mean(losses_without_steering[hook_address.layer(layer)])
+            avg_with_context = mean(losses_with_correct_context[hook_address.layer(layer)])
 
-        avg_steering_improvement = avg_non_steered - avg_steered
-        avg_context_improvement = avg_non_steered - avg_with_context
+            avg_steering_improvement = avg_non_steered - avg_steered
+            avg_context_improvement = avg_non_steered - avg_with_context
 
-        avg_normalized_improvement.append(avg_steering_improvement / avg_context_improvement)
+            avg_normalized_improvement[hook_address.layer(layer)] = avg_steering_improvement / avg_context_improvement
 
-    ax.bar(layers, avg_normalized_improvement)
-    ax.set_ylabel("relative improvement in loss")
-    ax.set_xlabel("layer")
-    ax.set_title(f"steering lambda={steering_lambda}")
-    ax.set_ylim(-2.5, 1)
+
+
+    fig, axs = plt.subplots(len(hook_addresses), 1, figsize=(8, 3 * len(hook_addresses)))
+    if type(axs) == Axes:
+        axs = np.array(axs)
+    else:
+        axs = axs.flatten()
+
+    for idx, hook_address in enumerate(hook_addresses):
+        ax = axs[idx]
+        improvement_scores = [avg_normalized_improvement[hook_address.layer(layer)] for layer in layers]
+
+        ax.bar(layers, improvement_scores)
+        ax.set_ylabel("score")
+        ax.set_xlabel("layer")
+        ax.set_title(f"{hook_address.address}")
+        ax.set_ylim(-2.5, 1)
+
+    fig.tight_layout()
 
 
 
