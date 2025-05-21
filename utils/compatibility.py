@@ -50,14 +50,26 @@ class ModelName:
 class Colors:
 
     @staticmethod
-    def color(hook_address):
+    def face(hook_address):
         _colors = {
-            'layernorm_1-pre': 'orange',
-            'attention-pre': 'orange',
-            'attention-post': 'orange',
-            'layernorm_2-pre': 'green',
-            'mlp-pre': 'green',
-            'mlp-post': 'green'
+            'layernorm_1-pre': '#ffe6cc',
+            'attention-pre': '#ffe6cc',
+            'attention-post': '#ffe6cc',
+            'layernorm_2-pre': '#d5e8d4',
+            'mlp-pre': '#d5e8d4',
+            'mlp-post': '#d5e8d4'
+        }
+        return _colors[hook_address.value]
+    
+    @staticmethod
+    def outline(hook_address):
+        _colors = {
+            'layernorm_1-pre': '#e2b13c',
+            'attention-pre': '#e2b13c',
+            'attention-post': '#e2b13c',
+            'layernorm_2-pre': '#bbd5ac',
+            'mlp-pre': '#bbd5ac',
+            'mlp-post': '#bbd5ac'
         }
         return _colors[hook_address.value]
 

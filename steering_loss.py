@@ -270,7 +270,10 @@ def get_steering_vector_scores(
             ax = axs[idx][idy]
             improvement_scores = [avg_normalized_improvement[hook_address.layer(layer)][steering_lambda] for layer in layers]
 
-            ax.bar(layers, improvement_scores, color=Colors.color(hook_address))
+            colors = [Colors.face(hook_address) if val > 0 else '#eaeaea' for val in improvement_scores]
+            edgecolors = [Colors.outline(hook_address) if val > 0 else '#d0d0d0' for val in improvement_scores]
+
+            ax.bar(layers, improvement_scores, color=colors, edgecolor=edgecolors)
             ax.set_title(f"{hook_address.address}, lambda={steering_lambda}")
             ax.set_ylim(-0.3, 0.5)
             ax.axhline(y=0, color='k', linestyle='dotted', linewidth=1)
