@@ -262,6 +262,7 @@ def plot_loss_for_steering_vectors(
         ax.set_xlabel("layer")
         ax.set_title(f"{hook_address.address}")
         ax.set_ylim(-2.5, 1)
+        ax.axhline(y=0, color='k', linestyle='dotted', linewidth=1)
 
     fig.tight_layout()
 
