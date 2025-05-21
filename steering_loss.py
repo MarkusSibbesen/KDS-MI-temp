@@ -147,6 +147,218 @@ def loss_with_steering(
         avg_loss_continuation = loss_continuation.mean().item()
 
         return avg_loss_continuation
+
+
+def loss_with_steering_batches(
+        model: GPTNeoXForCausalLM | GPT2Model,
+        tokenizer: PreTrainedTokenizerBase,
+        hook_address,
+        prompt: str,
+        continuation: str,
+        steering_vector: torch.Tensor,
+        steering_lambda: int = 1
+    ) -> float:
+    '''
+    Computes the loss (next-token prediction) for a steered model, given a prompt and a true continuation. Returns only the loss on the continuation.
+
+    Args:
+        model: the torch model
+        tokenizer: the model's tokenizer        prompt: the text prompt, given as context for prediction
+        continuation: the ground truth continuation, used for computing loss
+        steering_vector: the torch.Tensor steering vector
+        steering_lambda: the scalar which will scale the steering vector before it being applied
+
+    Returns:
+        Average loss on continuation
+    '''
+    
+    device = Device.device(model)
+    if tokenizer.pad_token == None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+
+    with HookManager(model) as hook_manager:
+        hook_manager.steer(
+            hook_address=hook_address,
+            steering_vector=steering_vector.to(device),
+            scalar=steering_lambda,
+        )
+
+        # tokenizes the prompt and continuation batches
+        tokenized_prompt = tokenizer(prompt, padding=True, truncation=True, return_tensors='pt').to(device)
+        tokenized_continuation = tokenizer(continuation, padding=True, truncation=True, return_tensors='pt').to(device)
+
+        # need to track the actual lengths before padding
+        prompt_lengths = tokenized_prompt.attention_mask.sum(dim=1)
+        continuation_lengths = tokenized_continuation.attention_mask.sum(dim=1)
+
+        # combines them into one batch input
+        batch_size = tokenized_prompt.input_ids.shape[0]
+        combined_inputs = []
+        combined_masks = []
+
+        for i in range(batch_size):
+            combined_inputs.append(torch.cat([tokenized_prompt.input_ids[i, :prompt_lengths[i]], 
+                                            tokenized_continuation.input_ids[i, :continuation_lengths[i]]]))
+            combined_masks.append(torch.cat([tokenized_prompt.attention_mask[i, :prompt_lengths[i]],
+                                            tokenized_continuation.attention_mask[i, :continuation_lengths[i]]]))
+
+        # pad the combined sequences
+        max_len = max([len(seq) for seq in combined_inputs])
+        padded_inputs = torch.ones(batch_size, max_len, dtype=torch.long, device=device) * tokenizer.pad_token_id
+        padded_masks = torch.zeros(batch_size, max_len, dtype=torch.long, device=device)
+
+        for i in range(batch_size):
+            seq_len = combined_inputs[i].shape[0]
+            padded_inputs[i, :seq_len] = combined_inputs[i]
+            padded_masks[i, :seq_len] = combined_masks[i]
+
+        # compute outputs from model
+        outputs = model(input_ids=padded_inputs, attention_mask=padded_masks)
+
+        # calculate losses for each sequence individually
+        losses = []
+
+        for i in range(batch_size):
+            # get predictions and labels for this sequence (shifted)
+            seq_len = prompt_lengths[i] + continuation_lengths[i]
+            logits = outputs.logits[i, :seq_len-1, :]  # exclude last token's prediction
+            labels = padded_inputs[i, 1:seq_len]  # exclude first token as label
+            
+            # compute token-wise losses
+            loss_fn = torch.nn.CrossEntropyLoss(reduction='none')
+            loss_by_token = loss_fn(logits, labels)
+            
+            # isolate continuation losses
+            continuation_start = prompt_lengths[i] - 1  # -1 because we shifted
+            loss_continuation = loss_by_token[continuation_start:]
+            
+            # store the average loss for this example's continuation
+            avg_loss_continuation = loss_continuation.mean().item()
+            losses.append(avg_loss_continuation)
+
+        # now losses contains the per-example continuation losses
+        batch_loss = torch.tensor(losses).mean().item()
+
+        return batch_loss
+    
+
+def plot_loss_for_steering_vectors_batches(
+        model: GPTNeoXForCausalLM | GPT2Model,
+        tokenizer: PreTrainedTokenizerBase,
+        loader,
+        steering_lambda: int,
+        lan1: str,
+        lan2: str,
+        amount_datapoints: int,
+        layers=None,
+        hook_addresses=None
+    ):
+    '''
+    plots loss for steering each layer
+
+    Args:
+        model: model to steer,
+        tokenizer: the model's tokenizer
+        ds: dataset of sentence, continuation for two parallel languages
+        steering_vectors_by_layer: dictionary with keys as layer and values as corresponding steering vector for the given language
+        lan1: language to steer *away from*
+        lan2: language to steer *toward*
+        amount_datapoints: only compute on first k datapoints in dataset
+
+    Returns:
+        a pyplot figure
+    '''
+
+    losses_with_steering = defaultdict(list)
+    losses_without_steering = defaultdict(list)
+    losses_with_correct_context = defaultdict(list)
+
+    if not hook_addresses:
+        hook_addresses = list(HookAddress)
+    if not layers:
+        layers = list(range(ModelConfig.hidden_layers(model)))
+
+
+    for idx, x in tqdm(enumerate(loader)):
+        if idx > amount_datapoints:
+            break
+        
+        for layer in layers:
+            for hook_address in hook_addresses:
+
+                steering_vector = load_steering_vector(lan2, hook_address.layer(layer), model)
+            
+                # computes the loss, when the model is steered towards the continuation language 
+                loss_with_steering_ = loss_with_steering_batches(
+                    model=model,
+                    tokenizer=tokenizer,
+                    hook_address=hook_address.layer(layer),
+                    prompt=x[lan1][0],
+                    continuation=x[lan2][1],
+                    steering_vector=steering_vector,
+                    steering_lambda=steering_lambda
+                )
+                losses_with_steering[hook_address.layer(layer)].append(loss_with_steering_)
+
+                # computes the loss, when the model is not steering
+                loss_without_steering = loss_with_steering_batches(
+                    model=model,
+                    tokenizer=tokenizer,
+                    hook_address=hook_address.layer(layer),
+                    prompt=x[lan1][0],
+                    continuation=x[lan2][1],
+                    steering_vector=steering_vector,
+                    steering_lambda=0
+                )
+                losses_without_steering[hook_address.layer(layer)].append(loss_without_steering)
+
+                # computes the loss without steering, but where the prompt matches the continuation language
+                loss_with_correct_context = loss_with_steering_batches(
+                    model=model,
+                    tokenizer=tokenizer,
+                    hook_address=hook_address.layer(layer),
+                    prompt=x[lan2][0],
+                    continuation=x[lan2][1],
+                    steering_vector=steering_vector,
+                    steering_lambda=0
+                )
+                losses_with_correct_context[hook_address.layer(layer)].append(loss_with_correct_context)
+
+
+    avg_normalized_improvement = dict()
+
+    for layer in layers:
+        for hook_address in hook_addresses:
+            avg_steered = mean(losses_with_steering[hook_address.layer(layer)])
+            avg_non_steered = mean(losses_without_steering[hook_address.layer(layer)])
+            avg_with_context = mean(losses_with_correct_context[hook_address.layer(layer)])
+
+            avg_steering_improvement = avg_non_steered - avg_steered
+            avg_context_improvement = avg_non_steered - avg_with_context
+
+            avg_normalized_improvement[hook_address.layer(layer)] = avg_steering_improvement / avg_context_improvement
+
+
+
+    fig, axs = plt.subplots(len(hook_addresses), 1, figsize=(8, 3 * len(hook_addresses)))
+    if type(axs) == Axes:
+        axs = np.array(axs)
+    else:
+        axs = axs.flatten()
+
+    for idx, hook_address in enumerate(hook_addresses):
+        ax = axs[idx]
+        improvement_scores = [avg_normalized_improvement[hook_address.layer(layer)] for layer in layers]
+
+        ax.bar(layers, improvement_scores)
+        ax.set_ylabel("score")
+        ax.set_xlabel("layer")
+        ax.set_title(f"{hook_address.address}")
+        ax.set_ylim(-2.5, 1)
+        ax.axhline(y=0, color='k', linestyle='dotted', linewidth=1)
+
+    fig.tight_layout()
     
 
 def plot_loss_for_steering_vectors(
