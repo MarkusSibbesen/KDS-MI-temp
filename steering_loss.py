@@ -152,7 +152,7 @@ def loss_with_steering(
     
     
 
-def get_steering_vector_scores(
+def plot_steering_vector_scores(
         model: GPTNeoXForCausalLM | GPT2Model,
         tokenizer: PreTrainedTokenizerBase,
         ds: ParallelNSPDataset,
@@ -162,6 +162,7 @@ def get_steering_vector_scores(
         amount_datapoints: int,
         layers=None,
         hook_addresses=None,
+        out_file=None
     ):
     '''
     plots loss for steering each layer
@@ -256,7 +257,7 @@ def get_steering_vector_scores(
     fig, axs = plt.subplots(
         len(steering_lambdas), 
         len(hook_addresses), 
-        figsize=(3 * len(hook_addresses), 2 * len(steering_lambdas)),
+        figsize=(3.5 * len(hook_addresses), 2.3 * len(steering_lambdas)),
         sharex=True,
         sharey=True)
                             
@@ -281,6 +282,57 @@ def get_steering_vector_scores(
     fig.supxlabel("layer")
     fig.supylabel("score")
     fig.tight_layout()
+
+    if out_file:
+        fig.savefig(f'{out_file}', transparent=False, dpi=300)
+
+    return avg_normalized_improvement
+
+
+
+def first_fig(model, tokenizer, shuffled_dataset, out_file=None):
+
+    scores = plot_steering_vector_scores(
+        model=model,
+        tokenizer=tokenizer,
+        ds=shuffled_dataset,
+        steering_lambdas=[5],
+        lan1='en',
+        lan2='da',
+        amount_datapoints=50
+    )
+
+
+    fig, axs = plt.subplots(
+    2, 
+    3, 
+    figsize=(3.5 * 3, 2.3 * 2),
+    sharex=True,
+    sharey=True)
+                        
+    axs = axs.flatten()
+
+    layers = list(range(ModelConfig.hidden_layers(model)))
+    hook_addresses = list(HookAddress)
+
+    for idx, hook_address in enumerate(hook_addresses):
+        ax = axs[idx]
+        improvement_scores = [scores[hook_address.layer(layer)][5] for layer in layers]
+
+        colors = [Colors.face(hook_address) if val > 0 else '#eaeaea' for val in improvement_scores]
+        edgecolors = [Colors.outline(hook_address) if val > 0 else '#d0d0d0' for val in improvement_scores]
+
+        ax.bar(layers, improvement_scores, color=colors, edgecolor=edgecolors)
+        ax.set_title(f"{hook_address.address}, lambda={5}")
+        ax.set_ylim(-0.3, 0.5)
+        ax.axhline(y=0, color='k', linestyle='dotted', linewidth=1)
+
+    fig.supxlabel("layer")
+    fig.supylabel("score")
+    fig.tight_layout()
+
+    if out_file:
+        fig.savefig(f'{out_file}', transparent=False, dpi=300)
 
 
 
