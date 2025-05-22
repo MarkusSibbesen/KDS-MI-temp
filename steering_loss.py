@@ -265,6 +265,8 @@ def plot_steering_vector_scores(
         axs = np.array([[axs]])
     elif len(steering_lambdas) == 1:
         axs = np.array([axs])
+    elif len(hook_addresses) == 1:
+        axs = np.array([[ax] for ax in axs])
 
     for idx, steering_lambda in enumerate(steering_lambdas):
         for idy, hook_address in enumerate(hook_addresses):
