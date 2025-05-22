@@ -263,7 +263,7 @@ def plot_steering_vector_scores(
                             
     if type(axs) == Axes:
         axs = np.array([[axs]])
-    elif len(axs.shape) == 1:
+    elif len(steering_lambdas) == 1:
         axs = np.array([axs])
 
     for idx, steering_lambda in enumerate(steering_lambdas):
